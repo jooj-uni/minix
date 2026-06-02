@@ -1,100 +1,68 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
+#include <sys/types.h>
 #include <unistd.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 #include <sys/time.h>
-#include <time.h>
 
-/* simulando cpu bound */
-void rodar_cpu_bound(long max_ops) {
-    long i;
-    volatile double x = 1.0; 
-    /* esse volatile foi sugestao do gpt */
-    
-    for (i = 0; i < max_ops; i++) {
-        x = (x + 0.5) * 0.9999;
-    }
-}
+#define SEC(tv) (tv.tv_sec + tv.tv_usec/1e6)
 
-/* simulando io bound */
-void rodar_io_bound(long max_ops) {
-    long i;
-    FILE *fp;
-    
-    /* eu acho que algo assim eh suficiente, so abrir escrever e fechar */
-    for (i = 0; i < max_ops; i++) {
-        fp = fopen("/dev/null", "w");
-        if (fp != NULL) {
-            fprintf(fp, "io");
-            fclose(fp);
+int main(int argc, char **argv) {
+        struct timeval p_start, p_end, p_time;
+        int *pid;
+        unsigned long int x=1;
+        int num, nproc, io_ops, cpu_ops;
+        long int i=0;
+        if (argc != 4) {
+                printf("Uso comando: %s <num_procs> <IO_ops> <CPU_ops>"
+                        "\n <num_procs>: numero total de processos."
+                        "\n <IO_ops>: numero de operacoes de IO por processo"
+                        "\n <CPU_ops>: numero de operacoes de CPU por processo\n",
+                        argv[0]);
+                return 0;
         }
-    }
-}
+        nproc = atoi(argv[1]);
+        io_ops = atoi(argv[2]);
 
-/* forma simples 50/50 cpu e io, da pra mudar, mas assim fica mais facil e direto*/
-int main(int argc, char *argv[]) {
-    if (argc != 4) {
-        fprintf(stderr, "Uso: %s <num_processos> <ops_io> <ops_cpu>\n", argv[0]);
-        return 1;
-    }
-
-    int num_processos = atoi(argv[1]);
-    long ops_io = atol(argv[2]);
-    long ops_cpu = atol(argv[3]);
-
-    if (num_processos % 2 != 0) {
-        fprintf(stderr, "Criar um numero par de processos\n");
-        return 1;
-    }
-
-    struct timeval t_fork, t_fim;
-    pid_t pid;
-    int i;
-
-    for (i = 0; i < num_processos; i++) {
-
-        /* tempo de criacao do processo */
-        gettimeofday(&t_fork, NULL);
-
-        pid = fork();
-
-        if (pid < 0) {
-            perror("Erro no fork");
-            exit(1);
-        } 
-        else if (pid == 0) {
-            /* PROCESSO FILHO */
-            int meu_tipo_io = (i < num_processos / 2); /* exato 50/50 */
-
-
-
-            if (meu_tipo_io) {
-                rodar_io_bound(ops_io);
-            } else {
-                rodar_cpu_bound(ops_cpu);
-            }
-
-            /* tempo final */
-            gettimeofday(&t_fim, NULL);
-
-            /* tempo de retorno */
-            double tempo_retorno = (t_fim.tv_sec - t_fork.tv_sec) +
-                                  (t_fim.tv_usec - t_fork.tv_usec) / 1000000.0;
-
-            /* acho que tem tudo que precisa p analise dps */
-            printf("Processo %d | Tipo: %s | Tempo de Retorno: %.4f segundos\n", 
-                   getpid(), meu_tipo_io ? "IO-bound" : "CPU-bound", tempo_retorno);
-            fflush(stdout);
-            
-            exit(0);
+        cpu_ops = atoi(argv[3]);
+        pid = (int *)calloc(nproc, sizeof(int));
+        if (!pid){
+                perror("calloc()");
+                return -1;
         }
-    }
 
-    /* PROCESSO PAI aguarda todos os filhos terminarem para o programa fechar */
-    for (i = 0; i < num_processos; i++) {
-        wait(NULL);
-    }
-
-    return 0;
+        for(num=0; num<nproc; num++) {
+                pid[num]=fork();
+                if(pid[num]==0) {
+                        // Se num for par, filho eh IO bound,
+                        // senao, eh CPU bund
+                        if((num % 2) == 0) {
+                                gettimeofday(&p_start, NULL);
+                                for(i=0; i<io_ops; i++){
+                                        fprintf(stderr, "Proc:%d i=%ld\n", num, i);
+                                        fflush(stderr);
+                                }
+                                gettimeofday(&p_end, NULL);
+                                timersub(&p_end, &p_start, &p_time);
+                                printf("IO\t %d\t %g\n",num, SEC(p_time));
+                        } else {
+                                gettimeofday(&p_start, NULL);
+                                for(i=0; i<cpu_ops; i++)
+{
+                                        x = (x << 4) - (x << 4);
+                                }
+                                gettimeofday(&p_end, NULL);
+                                timersub(&p_end, &p_start, &p_time);
+                                printf("CPU\t %d\t %g\n",num, SEC(p_time));
+                        }
+                        exit(0); // todo filho termina aqui ...
+                }
+        }
+        // pai apenas aguarda o termino dos filhos
+        for(i=0; i<nproc; i++) {
+                int pid_p=wait(NULL);
+        }
+        return 0;
 }
