@@ -1604,29 +1604,24 @@ void enqueue(
  * This function can be used x-cpu as it always uses the queues of the cpu the
  * process is assigned to.
  */
-  /*int q = rp->p_priority;*/	 		/* scheduling queue to use */
+  int q; 		/* scheduling queue to use */
 
-  /*===================ROUND ROBIN SEM PRIORIDADE==================*/
-  /* fiaxr q p prioridade e fila unica*/
-  int q = 0;
+  if (priv(rp)->s_flags & BILLABLE){
+    q = 8;
+  } else {
+    q = rp->p_priority;
+  }
+
   struct proc **rdy_head, **rdy_tail;
   
-  assert(proc_is_runnable(rp));		/* checa se o processo ta pronto p executar*/
+  assert(proc_is_runnable(rp));
 
-  assert(q >= 0);		/* checa se a prioridade nao eh nula*/
+  assert(q >= 0);
 
-/* esse get_cpu_var eh um macro, ele soh pega o campo, que eh o segundo param na chamada, de uma struct, _cpu_local_vars
- * que eh uma struct que tem uma instancia por cpu
- * ela ta definida em cpulocals.h
- * tem uma penca de ponteiros, um p cada fial de prioridade
- * e tem a head e tail de cada fila
- * tbm tem ponteiro pra processo atual, e um flag pra dizer se a cpu ta idle ou nao
- * então aqui a gente pega a head e tail da fila de prioridade q da cpu que o processo rp ta atribuido
- */
   rdy_head = get_cpu_var(rp->p_cpu, run_q_head);
   rdy_tail = get_cpu_var(rp->p_cpu, run_q_tail);
 
-  /* Now add the process to the queue. eh so uma insercao normal em lista encadeada */
+  /* Now add the process to the queue. */
   if (!rdy_head[q]) {		/* add to empty queue */
       rdy_head[q] = rdy_tail[q] = rp; 		/* create a new queue */
       rp->p_nextready = NULL;		/* mark new end */
@@ -1637,21 +1632,21 @@ void enqueue(
       rp->p_nextready = NULL;		/* mark new end */
   }
 
-
-  /* n precisa fazer essa checagem ja q nao tem prioridades */
-  //if (cpuid == rp->p_cpu) {
+  if (cpuid == rp->p_cpu) {
 	  /*
 	   * enqueueing a process with a higher priority than the current one,
 	   * it gets preempted. The current process must be preemptible. Testing
 	   * the priority also makes sure that a process does not preempt itself
 	   */
-	//  struct proc * p;
-	//  p = get_cpulocal_var(proc_ptr);
-	//  assert(p);
-	//  if((p->p_priority > rp->p_priority) &&
-	//		  (priv(p)->s_flags & PREEMPTIBLE))
-	//	  RTS_SET(p, RTS_PREEMPTED); /* calls dequeue() */
-  //}
+	  struct proc * p;
+	  p = get_cpulocal_var(proc_ptr);
+	  assert(p);
+	  if (!(priv(rp)->s_flags & BILLABLE)) {
+		if((p->p_priority > rp->p_priority) &&
+				(priv(p)->s_flags & PREEMPTIBLE))
+			RTS_SET(p, RTS_PREEMPTED); /* calls dequeue() */
+	  }
+  }
 #ifdef CONFIG_SMP
   /*
    * if the process was enqueued on a different cpu and the cpu is idle, i.e.
@@ -1683,10 +1678,13 @@ void enqueue(
  */
 static void enqueue_head(struct proc *rp)
 {
-  // ==================ROUND ROBIN SEM PRIORIDADE==================
-  //const int q = rp->p_priority;	 		/* scheduling queue to use */
 
-  const int q = 0;		/* fila unica */
+  if (priv(rp)->s_flags & BILLABLE) {
+    enqueue(rp);
+    return;
+  }
+  const int q = rp->p_priority;	 		/* scheduling queue to use */
+
   struct proc **rdy_head, **rdy_tail;
 
   assert(proc_ptr_ok(rp));
@@ -1703,6 +1701,8 @@ static void enqueue_head(struct proc *rp)
 
   rdy_head = get_cpu_var(rp->p_cpu, run_q_head);
   rdy_tail = get_cpu_var(rp->p_cpu, run_q_tail);
+
+
 
   /* Now add the process to the queue. */
   if (!rdy_head[q]) {		/* add to empty queue */
@@ -1739,9 +1739,14 @@ void dequeue(struct proc *rp)
  * This function can operate x-cpu as it always removes the process from the
  * queue of the cpu the process is currently assigned to.
  */
-//=================ROUND ROBIN SEM PRIORIDADE=====================
-  //int q = rp->p_priority;		/* queue to use */
-  const int q = 0;		/* fila unica */
+  int q;
+
+  if (priv(rp)->s_flags & BILLABLE){
+    q = 8;
+  } else {
+    q = rp->p_priority;		/* queue to use */
+  }
+
   struct proc **xpp;			/* iterate over queue */
   struct proc *prev_xp;
   u64_t tsc, tsc_delta;
@@ -1810,31 +1815,31 @@ static struct proc * pick_proc(void)
  */
   register struct proc *rp;			/* process to run */
   struct proc **rdy_head;
-  //int q;				/* iterate over queues */
-  int q = 0;				/* fila unica */
+  int q;				/* iterate over queues */
 
   /* Check each of the scheduling queues for ready processes. The number of
    * queues is defined in proc.h, and priorities are set in the task table.
    * If there are no processes ready to run, return NULL.
    */
   rdy_head = get_cpulocal_var(run_q_head);
-  /*
-  for (q=0; q < NR_SCHED_QUEUES; q++) {	
+  for (q=0; q < 8; q++) {	
 	if(!(rp = rdy_head[q])) {
 		TRACE(VF_PICKPROC, printf("cpu %d queue %d empty\n", cpuid, q););
 		continue;
 	}
-	*/
-	  /*=================ROUND ROBIN SEM PRIORIDADE==================*/
-  if(!(rp = rdy_head[0])) {
-	  TRACE(VF_PICKPROC, printf("cpu %d queue empty\n", cpuid););
-  }
-  else {
 	assert(proc_is_runnable(rp));
 	if (priv(rp)->s_flags & BILLABLE)	 	
 		get_cpulocal_var(bill_ptr) = rp; /* bill for system time */
 	return rp;
   }
+
+  if ((rp = rdy_head[8])){
+	if (priv(rp)->s_flags & BILLABLE){
+    	get_cpulocal_var(bill_ptr) = rp;
+	}
+    return rp;
+  }
+
   return NULL;
 }
 
@@ -1918,6 +1923,12 @@ static void notify_scheduler(struct proc *p)
 
 void proc_no_time(struct proc * p)
 {
+
+	if (priv(p)->s_flags & BILLABLE) {
+        p->p_cpu_time_left =
+            ms_2_cpu_time(p->p_quantum_size_ms);
+        return;
+    }
 	if (!proc_kernel_scheduler(p) && priv(p)->s_flags & PREEMPTIBLE) {
 		/* this dequeues the process */
 		notify_scheduler(p);
