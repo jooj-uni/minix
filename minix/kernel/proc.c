@@ -1604,6 +1604,9 @@ void enqueue(
  * This function can be used x-cpu as it always uses the queues of the cpu the
  * process is assigned to.
  */
+
+ /* manter a ideia de colocar todos os processos gerados por usuario na mesma fila*/
+
   int q; 		/* scheduling queue to use */
 
   if (priv(rp)->s_flags & BILLABLE){
@@ -1612,6 +1615,7 @@ void enqueue(
     q = rp->p_priority;
   }
 
+  rp->tickets = 10;		/* valor inicial fixo de tickets*/
   struct proc **rdy_head, **rdy_tail;
   
   assert(proc_is_runnable(rp));
@@ -1641,11 +1645,14 @@ void enqueue(
 	  struct proc * p;
 	  p = get_cpulocal_var(proc_ptr);
 	  assert(p);
-	  if (!(priv(rp)->s_flags & BILLABLE)) {
-		if((p->p_priority > rp->p_priority) &&
-				(priv(p)->s_flags & PREEMPTIBLE))
-			RTS_SET(p, RTS_PREEMPTED); /* calls dequeue() */
-	  }
+
+
+	  if(priv(rp)->s_flags & BILLABLE &&
+   		priv(p)->s_flags & BILLABLE) {
+
+      } else if((p->p_priority > rp->p_priority) &&
+			  (priv(p)->s_flags & PREEMPTIBLE))
+		  RTS_SET(p, RTS_PREEMPTED); /* calls dequeue() */
   }
 #ifdef CONFIG_SMP
   /*
@@ -1679,10 +1686,12 @@ void enqueue(
 static void enqueue_head(struct proc *rp)
 {
 
+	/* mesma ideia do fcfs, identificar processo de usuario pela flag BILLABLE*/
   if (priv(rp)->s_flags & BILLABLE) {
     enqueue(rp);
     return;
   }
+
   const int q = rp->p_priority;	 		/* scheduling queue to use */
 
   struct proc **rdy_head, **rdy_tail;
@@ -1701,8 +1710,6 @@ static void enqueue_head(struct proc *rp)
 
   rdy_head = get_cpu_var(rp->p_cpu, run_q_head);
   rdy_tail = get_cpu_var(rp->p_cpu, run_q_tail);
-
-
 
   /* Now add the process to the queue. */
   if (!rdy_head[q]) {		/* add to empty queue */
@@ -1739,19 +1746,17 @@ void dequeue(struct proc *rp)
  * This function can operate x-cpu as it always removes the process from the
  * queue of the cpu the process is currently assigned to.
  */
-  int q;
-
-  if (priv(rp)->s_flags & BILLABLE){
-    q = 8;
-  } else {
-    q = rp->p_priority;		/* queue to use */
-  }
-
+  int q;		/* queue to use */
   struct proc **xpp;			/* iterate over queue */
   struct proc *prev_xp;
   u64_t tsc, tsc_delta;
 
   struct proc **rdy_tail;
+
+  if(priv(rp)->s_flags & BILLABLE)
+    q = 8;
+  else
+    q = rp->p_priority;
 
   assert(proc_ptr_ok(rp));
   assert(!proc_is_runnable(rp));
@@ -1813,15 +1818,20 @@ static struct proc * pick_proc(void)
  *
  * This function always uses the run queues of the local cpu!
  */
+  u64_t tsc;
+  int vencedor;
   register struct proc *rp;			/* process to run */
   struct proc **rdy_head;
-  int q;				/* iterate over queues */
+  int q = 8;				/* iterate over queues */
 
   /* Check each of the scheduling queues for ready processes. The number of
    * queues is defined in proc.h, and priorities are set in the task table.
    * If there are no processes ready to run, return NULL.
    */
   rdy_head = get_cpulocal_var(run_q_head);
+
+
+
   for (q=0; q < 8; q++) {	
 	if(!(rp = rdy_head[q])) {
 		TRACE(VF_PICKPROC, printf("cpu %d queue %d empty\n", cpuid, q););
@@ -1833,12 +1843,37 @@ static struct proc * pick_proc(void)
 	return rp;
   }
 
-  if ((rp = rdy_head[8])){
-	if (priv(rp)->s_flags & BILLABLE){
-    	get_cpulocal_var(bill_ptr) = rp;
-	}
-    return rp;
+
+
+
+  int total = 0;
+
+  for(rp = rdy_head[q]; rp; rp = rp->p_nextready) {
+	total += rp->tickets;
   }
+
+  read_tsc_64(&tsc);
+
+  if(total > 0) {
+    vencedor = tsc % total;	
+  } else {
+	vencedor = 0;
+  }
+
+
+  int acc = 0;
+
+  for(rp = rdy_head[q]; rp; rp = rp->p_nextready) {
+	acc += rp->tickets;
+
+	if(acc > vencedor){
+	    if (priv(rp)->s_flags & BILLABLE){
+          get_cpulocal_var(bill_ptr) = rp;
+	      }
+      return rp;
+      }
+    }
+
 
   return NULL;
 }
@@ -1923,12 +1958,6 @@ static void notify_scheduler(struct proc *p)
 
 void proc_no_time(struct proc * p)
 {
-
-	if (priv(p)->s_flags & BILLABLE) {
-        p->p_cpu_time_left =
-            ms_2_cpu_time(p->p_quantum_size_ms);
-        return;
-    }
 	if (!proc_kernel_scheduler(p) && priv(p)->s_flags & PREEMPTIBLE) {
 		/* this dequeues the process */
 		notify_scheduler(p);
